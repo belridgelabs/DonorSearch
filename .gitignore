@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+*.pyo
+
+# Virtual environments
+venv/
+
+# Environment variables
+.env
+
+# VS Code
+.vscode/
+
+# OS metadata
+.DS_Store
+
+# Test/output artifacts (optional)
+*.log
+*.out
+*.tmp

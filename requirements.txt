@@ -1,0 +1,8 @@
+python-dotenv==1.0.0
+Crawl4AI==0.6.3
+playwright==1.53.0
+langchain==0.3.26
+pinecone-client==2.2.1
+langchain_community
+langchain-perplexity
+dotenv

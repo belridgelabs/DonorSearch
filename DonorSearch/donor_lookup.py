@@ -2,10 +2,153 @@ import json
 import requests
 import urllib.parse
 import time
-import csv
 from typing import List, Dict, Any
 from bs4 import BeautifulSoup
 import re
+from difflib import SequenceMatcher
+
+def extract_first_name_and_split(contributor_full: str, original_name: str) -> tuple[str, str]:
+    """
+    Extract the first name from the original name, capitalize it, and use it to split the contributor string.
+    
+    Args:
+        contributor_full (str): Full contributor string like "KAUR, AASEESDUNWOODY, GA 30360"
+        original_name (str): Original name from the query
+        
+    Returns:
+        tuple[str, str]: (name_part, address_part)
+    """
+    # Extract first name from original name and capitalize it
+    # Handle formats like "LAST, FIRST" or "FIRST LAST"
+    if ',' in original_name:
+        # Format: "LAST, FIRST"
+        parts = original_name.split(',')
+        if len(parts) >= 2:
+            first_name = parts[1].strip().split()[0]  # Get first word after comma
+        else:
+            first_name = parts[0].strip().split()[0]  # Fallback to first word
+    else:
+        # Format: "FIRST LAST" or single name
+        first_name = original_name.strip().split()[0]
+    
+    # Capitalize the first name
+    first_name_capitalized = first_name.upper()
+    
+    # Find the first occurrence of the capitalized first name in contributor_full
+    first_name_index = contributor_full.find(first_name_capitalized)
+    
+    if first_name_index != -1:
+        # Split at the first name
+        name_part = contributor_full[:first_name_index + len(first_name_capitalized)].strip()
+        address_part = contributor_full[first_name_index + len(first_name_capitalized):].strip()
+        return name_part, address_part
+    else:
+        # If first name not found, return the whole string as name and empty address
+        return contributor_full, ''
+
+def extract_name_from_contributor(contributor_full: str, original_name: str = '') -> str:
+    """
+    Extract the name part from the full contributor string using first name splitting.
+    
+    Args:
+        contributor_full (str): Full contributor string like "KAUR, AASEESDUNWOODY, GA 30360"
+        original_name (str): Original name from the query
+        
+    Returns:
+        str: Just the name part
+    """
+    if original_name:
+        name_part, _ = extract_first_name_and_split(contributor_full, original_name)
+        return name_part
+    else:
+        # Fallback to original logic if no original_name provided
+        return contributor_full
+
+def extract_address_from_contributor(contributor_full: str, original_name: str = '') -> str:
+    """
+    Extract the address part from the full contributor string using first name splitting.
+    
+    Args:
+        contributor_full (str): Full contributor string like "KAUR, AASEESDUNWOODY, GA 30360"
+        original_name (str): Original name from the query
+        
+    Returns:
+        str: Just the address part
+    """
+    if original_name:
+        _, address_part = extract_first_name_and_split(contributor_full, original_name)
+        return address_part
+    else:
+        # Fallback to empty string if no original_name provided
+        return ''
+
+def calculate_address_similarity(addr1: str, addr2: str) -> float:
+    """
+    Calculate similarity between two addresses.
+    
+    Args:
+        addr1 (str): First address
+        addr2 (str): Second address
+        
+    Returns:
+        float: Similarity ratio between 0 and 1
+    """
+    if not addr1 or not addr2:
+        return 0.0
+    
+    # Normalize addresses for comparison
+    addr1_norm = addr1.upper().strip()
+    addr2_norm = addr2.upper().strip()
+    
+    return SequenceMatcher(None, addr1_norm, addr2_norm).ratio()
+
+def group_donations_by_variants(donations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Group donations by similar addresses into variants.
+    
+    Args:
+        donations (List[Dict[str, Any]]): List of donation records
+        
+    Returns:
+        List[Dict[str, Any]]: List of variant groups
+    """
+    if not donations:
+        return []
+    
+    variants = []
+    used_indices = set()
+    
+    for i, donation in enumerate(donations):
+        if i in used_indices:
+            continue
+            
+        # Start a new variant group with this donation
+        variant = {
+            'contributor_name': donation.get('contributor_name', ''),
+            'contributor_address': donation.get('contributor_address', ''),
+            'donations': [donation]
+        }
+        
+        used_indices.add(i)
+        
+        # Find similar addresses (similarity >= 0.8 means 1-2 characters different)
+        current_address = donation.get('contributor_address', '')
+        
+        for j, other_donation in enumerate(donations):
+            if j in used_indices:
+                continue
+                
+            other_address = other_donation.get('contributor_address', '')
+            similarity = calculate_address_similarity(current_address, other_address)
+            
+            # Group if addresses are similar enough (allowing 1-2 character differences)
+            if similarity >= 0.8:
+                variant['donations'].append(other_donation)
+                used_indices.add(j)
+        
+        variants.append(variant)
+    
+    return variants
 
 def load_names_from_json(json_file_path: str) -> List[str]:
     """
@@ -31,12 +174,13 @@ def load_names_from_json(json_file_path: str) -> List[str]:
     
     return list(names)
 
-def parse_donation_table(html_content: str) -> List[Dict[str, Any]]:
+def parse_donation_table(html_content: str, original_name: str = '') -> List[Dict[str, Any]]:
     """
     Parse the donation table from OpenSecrets HTML content.
     
     Args:
         html_content (str): HTML content from OpenSecrets page
+        original_name (str): Original name used for the query
         
     Returns:
         List[Dict[str, Any]]: List of donation records
@@ -57,9 +201,16 @@ def parse_donation_table(html_content: str) -> List[Dict[str, Any]]:
         cells = row.find_all('td')
         if len(cells) >= 8:  # Ensure we have enough columns
             try:
+                contributor_full = cells[1].get_text(strip=True)
+                
+                # Extract name and address using original name for splitting
+                contributor_name = extract_name_from_contributor(contributor_full, original_name)
+                contributor_address = extract_address_from_contributor(contributor_full, original_name)
+                
                 donation = {
                     'category': cells[0].get_text(strip=True),
-                    'contributor': cells[1].get_text(strip=True),
+                    'contributor_name': contributor_name,
+                    'contributor_address': contributor_address,
                     'employer': cells[2].get_text(strip=True),
                     'occupation': cells[3].get_text(strip=True),
                     'date': cells[4].get_text(strip=True),
@@ -77,8 +228,7 @@ def parse_donation_table(html_content: str) -> List[Dict[str, Any]]:
                     donation['amount_numeric'] = 0
                 
                 # Extract state from contributor address
-                contributor_text = donation['contributor']
-                state_match = re.search(r'([A-Z]{2})\s+\d{5}', contributor_text)
+                state_match = re.search(r'([A-Z]{2})\s+\d{5}', contributor_address)
                 donation['contributor_state'] = state_match.group(1) if state_match else ''
                 
                 # Extract party affiliation from recipient
@@ -117,13 +267,16 @@ def query_opensecrets_donor(name: str) -> Dict[str, Any]:
         response.raise_for_status()  # Raise an exception for bad status codes
         
         # Parse the donation table from HTML
-        donations = parse_donation_table(response.text)
+        donations = parse_donation_table(response.text, name)
+        
+        # Group donations by variants (similar addresses)
+        variants = group_donations_by_variants(donations)
         
         return {
             'name': name,
             'url': url,
             'status_code': response.status_code,
-            'donations': donations,
+            'variants': variants,
             'total_donations': len(donations),
             'total_amount': sum(d.get('amount_numeric', 0) for d in donations),
             'success': True,
@@ -135,7 +288,7 @@ def query_opensecrets_donor(name: str) -> Dict[str, Any]:
             'name': name,
             'url': url,
             'status_code': None,
-            'donations': [],
+            'variants': [],
             'total_donations': 0,
             'total_amount': 0,
             'success': False,
@@ -188,251 +341,6 @@ def save_results_to_file(results: List[Dict[str, Any]], output_file: str) -> Non
     
     print(f"Results saved to {output_file}")
 
-def export_donations_to_csv(results: List[Dict[str, Any]], csv_file: str) -> None:
-    """
-    Export all donation records to a CSV file for easier analysis.
-    
-    Args:
-        results (List[Dict[str, Any]]): Results from donor lookup queries
-        csv_file (str): Path to save the CSV file
-    """
-    all_donations = []
-    
-    # Collect all donations from all results
-    for result in results:
-        if result['success'] and result['donations']:
-            for donation in result['donations']:
-                # Add the searched name to each donation record
-                donation_with_name = donation.copy()
-                donation_with_name['searched_name'] = result['name']
-                all_donations.append(donation_with_name)
-    
-    if not all_donations:
-        print("No donations found to export to CSV.")
-        return
-    
-    # Define CSV headers
-    headers = [
-        'searched_name', 'category', 'contributor', 'employer', 'occupation',
-        'date', 'amount', 'amount_numeric', 'recipient', 'jurisdiction'
-    ]
-    
-    # Write to CSV
-    with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-        writer = csv.DictWriter(file, fieldnames=headers)
-        writer.writeheader()
-        
-        for donation in all_donations:
-            # Ensure all required fields exist
-            row = {header: donation.get(header, '') for header in headers}
-            writer.writerow(row)
-    
-    print(f"Exported {len(all_donations)} donation records to {csv_file}")
-
-def extract_donor_key(donation: Dict[str, Any]) -> str:
-    """
-    Create a unique key for grouping donors based on name, state, and employer/occupation.
-    
-    Args:
-        donation (Dict[str, Any]): Donation record
-        
-    Returns:
-        str: Unique donor key
-    """
-    contributor = donation.get('contributor', '').strip()
-    state = donation.get('contributor_state', '').strip()
-    employer = donation.get('employer', '').strip()
-    occupation = donation.get('occupation', '').strip()
-    
-    # Extract just the name part (before address)
-    name_parts = contributor.split('\n')
-    name = name_parts[0].strip() if name_parts else contributor
-    
-    # Create a normalized key
-    key = f"{name}|{state}|{employer}|{occupation}".upper()
-    return key
-
-def group_donors_and_analyze_party(results: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """
-    Group donors by unique identifiers and analyze their party preferences.
-    
-    Args:
-        results (List[Dict[str, Any]]): Results from donor lookup queries
-        
-    Returns:
-        Dict[str, Dict[str, Any]]: Grouped donor analysis
-    """
-    donor_groups = {}
-    
-    # Collect all donations from all results
-    for result in results:
-        if result['success'] and result['donations']:
-            for donation in result['donations']:
-                donor_key = extract_donor_key(donation)
-                
-                if donor_key not in donor_groups:
-                    donor_groups[donor_key] = {
-                        'donor_info': {
-                            'name': donation.get('contributor', '').split('\n')[0].strip(),
-                            'state': donation.get('contributor_state', ''),
-                            'employer': donation.get('employer', ''),
-                            'occupation': donation.get('occupation', ''),
-                            'searched_name': result['name']
-                        },
-                        'donations': [],
-                        'party_analysis': {
-                            'democratic_count': 0,
-                            'republican_count': 0,
-                            'other_count': 0,
-                            'democratic_amount': 0,
-                            'republican_amount': 0,
-                            'other_amount': 0,
-                            'total_donations': 0,
-                            'total_amount': 0
-                        }
-                    }
-                
-                # Add donation to group
-                donor_groups[donor_key]['donations'].append(donation)
-                
-                # Update party analysis
-                party = donation.get('recipient_party', '')
-                amount = donation.get('amount_numeric', 0)
-                
-                analysis = donor_groups[donor_key]['party_analysis']
-                analysis['total_donations'] += 1
-                analysis['total_amount'] += amount
-                
-                if party == 'D':
-                    analysis['democratic_count'] += 1
-                    analysis['democratic_amount'] += amount
-                elif party == 'R':
-                    analysis['republican_count'] += 1
-                    analysis['republican_amount'] += amount
-                else:
-                    analysis['other_count'] += 1
-                    analysis['other_amount'] += amount
-    
-    # Calculate percentages and party preference
-    for donor_key, group in donor_groups.items():
-        analysis = group['party_analysis']
-        total = analysis['total_donations']
-        
-        if total > 0:
-            analysis['democratic_percentage'] = (analysis['democratic_count'] / total) * 100
-            analysis['republican_percentage'] = (analysis['republican_count'] / total) * 100
-            analysis['other_percentage'] = (analysis['other_count'] / total) * 100
-            
-            # Determine party preference
-            if analysis['democratic_percentage'] >= 80:
-                analysis['party_preference'] = 'Strong Democratic'
-            elif analysis['republican_percentage'] >= 80:
-                analysis['party_preference'] = 'Strong Republican'
-            elif analysis['democratic_percentage'] > analysis['republican_percentage']:
-                analysis['party_preference'] = 'Lean Democratic'
-            elif analysis['republican_percentage'] > analysis['democratic_percentage']:
-                analysis['party_preference'] = 'Lean Republican'
-            else:
-                analysis['party_preference'] = 'Mixed/Independent'
-        else:
-            analysis['democratic_percentage'] = 0
-            analysis['republican_percentage'] = 0
-            analysis['other_percentage'] = 0
-            analysis['party_preference'] = 'Unknown'
-    
-    return donor_groups
-
-def export_grouped_donors_to_csv(donor_groups: Dict[str, Dict[str, Any]], csv_file: str) -> None:
-    """
-    Export grouped donor analysis to CSV.
-    
-    Args:
-        donor_groups (Dict[str, Dict[str, Any]]): Grouped donor data
-        csv_file (str): Path to save the CSV file
-    """
-    if not donor_groups:
-        print("No donor groups found to export.")
-        return
-    
-    headers = [
-        'donor_name', 'state', 'employer', 'occupation', 'searched_name',
-        'total_donations', 'total_amount', 
-        'democratic_count', 'democratic_amount', 'democratic_percentage',
-        'republican_count', 'republican_amount', 'republican_percentage',
-        'other_count', 'other_amount', 'other_percentage',
-        'party_preference'
-    ]
-    
-    with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-        writer = csv.DictWriter(file, fieldnames=headers)
-        writer.writeheader()
-        
-        for donor_key, group in donor_groups.items():
-            info = group['donor_info']
-            analysis = group['party_analysis']
-            
-            row = {
-                'donor_name': info['name'],
-                'state': info['state'],
-                'employer': info['employer'],
-                'occupation': info['occupation'],
-                'searched_name': info['searched_name'],
-                'total_donations': analysis['total_donations'],
-                'total_amount': analysis['total_amount'],
-                'democratic_count': analysis['democratic_count'],
-                'democratic_amount': analysis['democratic_amount'],
-                'democratic_percentage': round(analysis['democratic_percentage'], 1),
-                'republican_count': analysis['republican_count'],
-                'republican_amount': analysis['republican_amount'],
-                'republican_percentage': round(analysis['republican_percentage'], 1),
-                'other_count': analysis['other_count'],
-                'other_amount': analysis['other_amount'],
-                'other_percentage': round(analysis['other_percentage'], 1),
-                'party_preference': analysis['party_preference']
-            }
-            writer.writerow(row)
-    
-    print(f"Exported {len(donor_groups)} grouped donors to {csv_file}")
-
-def export_detailed_donations_with_grouping(results: List[Dict[str, Any]], csv_file: str) -> None:
-    """
-    Export detailed donation records with donor grouping information.
-    
-    Args:
-        results (List[Dict[str, Any]]): Results from donor lookup queries
-        csv_file (str): Path to save the CSV file
-    """
-    all_donations = []
-    
-    # Collect all donations with grouping keys
-    for result in results:
-        if result['success'] and result['donations']:
-            for donation in result['donations']:
-                donation_with_info = donation.copy()
-                donation_with_info['searched_name'] = result['name']
-                donation_with_info['donor_group_key'] = extract_donor_key(donation)
-                all_donations.append(donation_with_info)
-    
-    if not all_donations:
-        print("No donations found to export.")
-        return
-    
-    headers = [
-        'searched_name', 'donor_group_key', 'category', 'contributor', 'contributor_state',
-        'employer', 'occupation', 'date', 'amount', 'amount_numeric', 
-        'recipient', 'recipient_party', 'jurisdiction'
-    ]
-    
-    with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-        writer = csv.DictWriter(file, fieldnames=headers)
-        writer.writeheader()
-        
-        for donation in all_donations:
-            row = {header: donation.get(header, '') for header in headers}
-            writer.writerow(row)
-    
-    print(f"Exported {len(all_donations)} detailed donation records to {csv_file}")
-
 # Example usage
 if __name__ == "__main__":
     # Path to the input JSON file
@@ -447,34 +355,14 @@ if __name__ == "__main__":
     # Save results
     save_results_to_file(results, output_file)
     
-    # Group donors and analyze party preferences
-    print("\nGrouping donors and analyzing party preferences...")
-    donor_groups = group_donors_and_analyze_party(results)
-    
-    # Export grouped donor analysis
-    grouped_csv_file = "./donor_groups_analysis.csv"
-    export_grouped_donors_to_csv(donor_groups, grouped_csv_file)
-    
-    # Export detailed donations with grouping information
-    detailed_csv_file = "./detailed_donations_with_grouping.csv"
-    export_detailed_donations_with_grouping(results, detailed_csv_file)
-    
-    # Export original format for backward compatibility
-    original_csv_file = "./donor_lookup_results.csv"
-    export_donations_to_csv(results, original_csv_file)
-    
     # Print summary
     successful = sum(1 for r in results if r['success'])
     failed = len(results) - successful
     total_donations = sum(r['total_donations'] for r in results if r['success'])
     total_amount = sum(r['total_amount'] for r in results if r['success'])
     
-    # Analyze party preferences
-    strong_dem = sum(1 for g in donor_groups.values() if g['party_analysis']['party_preference'] == 'Strong Democratic')
-    strong_rep = sum(1 for g in donor_groups.values() if g['party_analysis']['party_preference'] == 'Strong Republican')
-    lean_dem = sum(1 for g in donor_groups.values() if g['party_analysis']['party_preference'] == 'Lean Democratic')
-    lean_rep = sum(1 for g in donor_groups.values() if g['party_analysis']['party_preference'] == 'Lean Republican')
-    mixed = sum(1 for g in donor_groups.values() if g['party_analysis']['party_preference'] == 'Mixed/Independent')
+    # Count total variants
+    total_variants = sum(len(r['variants']) for r in results if r['success'])
     
     print(f"\nSummary:")
     print(f"Total names processed: {len(results)}")
@@ -482,16 +370,6 @@ if __name__ == "__main__":
     print(f"Failed queries: {failed}")
     print(f"Total donations found: {total_donations}")
     print(f"Total donation amount: ${total_amount:,}")
-    print(f"\nDonor Grouping:")
-    print(f"Unique donors identified: {len(donor_groups)}")
-    print(f"\nParty Preferences:")
-    print(f"Strong Democratic: {strong_dem}")
-    print(f"Lean Democratic: {lean_dem}")
-    print(f"Strong Republican: {strong_rep}")
-    print(f"Lean Republican: {lean_rep}")
-    print(f"Mixed/Independent: {mixed}")
+    print(f"Total variants (grouped by similar addresses): {total_variants}")
     print(f"\nFiles created:")
-    print(f"- JSON results: {output_file}")
-    print(f"- Grouped donor analysis: {grouped_csv_file}")
-    print(f"- Detailed donations with grouping: {detailed_csv_file}")
-    print(f"- Original format CSV: {original_csv_file}")
+    print(f"- JSON results with variants: {output_file}")

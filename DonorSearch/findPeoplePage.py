@@ -6,6 +6,7 @@ import asyncio
 import json
 from crawl4ai.deep_crawling.filters import ContentRelevanceFilter, FilterChain
 from crawl4ai.content_scraping_strategy import LXMLWebScrapingStrategy
+import time
 
 '''
 this script takes the sources found by sourceFinder.py and finds the people pages for each source
@@ -38,7 +39,7 @@ async def deepCrawl(urls: list[str]):
         deep_crawl_strategy=BestFirstCrawlingStrategy(
             max_depth=2,
             include_external=False,
-            max_pages=3,
+            max_pages=6,
             url_scorer=scorer,
             filter_chain=FilterChain([relevance_filter]),
         ),
@@ -55,13 +56,18 @@ async def deepCrawl(urls: list[str]):
 
     async with AsyncWebCrawler() as crawler:
         # Get results as a list instead of async generator
-        for url in urls:
-            crawl_results = await crawler.arun(
-                url=url,
-                config=config
-            )
+        start_time = time.process_time()
+        # for url in urls:
+        #     crawl_results = await crawler.arun(
+        #         url=url,
+        #         config=config
+        #     )
         
+        tasks = [crawler.arun(url=url, config=config) for url in urls]
+        all_crawl_results = await asyncio.gather(*tasks, return_exceptions=True)
+
         # Now iterate over the list of results
+        for crawl_results in all_crawl_results:
             for result in crawl_results:
                 results.append(result)
 
@@ -74,6 +80,8 @@ async def deepCrawl(urls: list[str]):
                     print(result.url)
                     print("failed") 
                     print(result.url, "->", result.error_message)
+        final_time = time.process_time() - start_time
+        print(f"Time taken: {final_time} seconds")
     
     # Sort results by input score in descending order
     scored_results.sort(key=lambda x: x[0], reverse=True)  # Higher scores first

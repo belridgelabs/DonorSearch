@@ -21,3 +21,5 @@ venv/
 *.log
 *.out
 *.tmp
+
+.trae/*

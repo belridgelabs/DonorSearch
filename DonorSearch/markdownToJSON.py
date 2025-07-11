@@ -54,7 +54,23 @@ async def main():
             for org in parsed:
                 if isinstance(org, dict):
                     org["url"] = url
-                    results.append(org)
+                    
+                    # Check if organization already exists in results
+                    existing_org = None
+                    for existing in results:
+                        if existing.get("organization") == org.get("organization"):
+                            existing_org = existing
+                            break
+                    
+                    if existing_org:
+                        # Add members to existing organization
+                        if "members" in org and isinstance(org["members"], list):
+                            if "members" not in existing_org:
+                                existing_org["members"] = []
+                            existing_org["members"].extend(org["members"])
+                    else:
+                        # Add new organization
+                        results.append(org)
 
         except Exception as e:
             print(f"[ERROR] Could not parse output from {url}: {e}")

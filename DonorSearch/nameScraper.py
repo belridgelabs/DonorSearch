@@ -10,11 +10,10 @@ scrape the names of members, directors, etc.
 print("basic web crawler")
 
 async def crawl_names():
+
     async with AsyncWebCrawler() as crawler:
-        urls = [
-            "https://sikhnationalbar.org/board-of-directors/",
-            "https://www.sikhcoalition.org/about-us/"
-        ]
+        with open('people_pages.json', 'r') as f:
+            urls = json.load(f)
 
         results: List[CrawlResult] = await crawler.arun_many(
             urls=urls,
@@ -37,17 +36,14 @@ async def crawl_names():
             else:
                 print('failed')
         '''
-
         data = [(result.url, result.markdown.fit_markdown) for result in results]
 
     return data
 
-'''          
-async def save_to_json(data: list[tuple[str, str]], filename="output.json"):
-    out = [{"url": url, "markdown": markdown} for url, markdown in data]
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
-'''
+# async def save_to_json(data: list[tuple[str, str]], filename="output.json"):
+#     out = [{"url": url, "markdown": markdown} for url, markdown in data]
+#     with open(filename, "w", encoding="utf-8") as f:
+#         json.dump(out, f, indent=2)
 
 async def main():
     results = await crawl_names()

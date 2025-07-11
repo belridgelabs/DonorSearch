@@ -1,6 +1,6 @@
 from crawl4ai.deep_crawling import BestFirstCrawlingStrategy
 from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
-from crawl4ai import AsyncWebCrawler, CrawlResult, CrawlerRunConfig, DefaultMarkdownGenerator, PruningContentFilter
+from crawl4ai import AsyncWebCrawler, CrawlResult, CrawlerRunConfig, DefaultMarkdownGenerator, PruningContentFilter, SEOFilter
 from typing import List
 import asyncio
 import json
@@ -13,7 +13,7 @@ this script takes the sources found by sourceFinder.py and finds the people page
 
 async def getURLs():
     urls = []
-    with open("sources.json", "r", encoding="utf-8") as f:
+    with open("./sources.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
     for d in data:
@@ -24,53 +24,67 @@ async def getURLs():
 
 async def deepCrawl(urls: list[str]):
     scorer = KeywordRelevanceScorer(
-        keywords=["team", "staff", "board of directors", "board", "members"],
-        weight=0.3
+        keywords=["about", "people", "team", "information"],
+        weight=0.7
     )
 
     relevance_filter = ContentRelevanceFilter(
-        query="List of staff, members, board of directors, volunteers, etc.",
-        threshold=0.2
+        query="about people information team board values mission",
+        k1=1,
+        threshold=1
     )
 
     config = CrawlerRunConfig(
         deep_crawl_strategy=BestFirstCrawlingStrategy(
             max_depth=2,
             include_external=False,
-            max_pages=30,
+            max_pages=3,
             url_scorer=scorer,
             filter_chain=FilterChain([relevance_filter]),
         ),
-        stream=True,
+        stream=False,  # Changed from True to False
         verbose=True,
         scraping_strategy=LXMLWebScrapingStrategy()
     )
 
+    
+
     results = []
     resultURLs = []
+    scored_results = []  # List to store tuples of (score, url)
 
     async with AsyncWebCrawler() as crawler:
-        async for result in await crawler.arun_many(
-            urls=urls,
-            config=config
-        ):
-            results.append(result)
+        # Get results as a list instead of async generator
+        for url in urls:
+            crawl_results = await crawler.arun(
+                url=url,
+                config=config
+            )
+        
+        # Now iterate over the list of results
+            for result in crawl_results:
+                results.append(result)
 
-            if result.success:
-                print(result.url)
-                print(f"score: {scorer.score(result.markdown.fit_markdown)}") 
-                resultURLs.append(result.url)
-            else:
-                print(result.url)
-                print("failed")
-                print(result.url, "->", result.error_message)
-                
-    print("done")
+                if result.success:
+                    # Get input score from metadata, default to 0 if not found
+                    input_score = result.metadata.get("score")
+                    print(f"Input score: {input_score}")
+                    scored_results.append((input_score, result.url))
+                else:
+                    print(result.url)
+                    print("failed") 
+                    print(result.url, "->", result.error_message)
+    
+    # Sort results by input score in descending order
+    scored_results.sort(key=lambda x: x[0], reverse=True)  # Higher scores first
+    resultURLs = [url for score, url in scored_results if score>0]
     return resultURLs
 
 async def main():
     urls = await getURLs()
-    await deepCrawl(urls)
+    result_urls = await deepCrawl(urls)
+    with open("people_pages.json", "w", encoding="utf-8") as f:
+        json.dump(result_urls, f, indent=4)
 
 if __name__ == "__main__":
     asyncio.run(main())

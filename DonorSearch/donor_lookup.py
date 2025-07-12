@@ -9,7 +9,15 @@ from difflib import SequenceMatcher
 
 def extract_first_name_and_split(contributor_full: str, original_name: str) -> tuple[str, str]:
     """
-    Extract the first name from the original name, capitalize it, and use it to split the contributor string.
+    Enhanced function to split name from address using sophisticated logic.
+    
+    The full name is known in advance (first_name, last_name), and the input string 
+    begins with the name directly followed by the address (with no delimiter).
+    
+    Logic:
+    1. Extract everything before the first occurrence of the first name
+    2. If this prefix (case-insensitive) starts with the last name followed by a comma, keep it as the parsed name
+    3. If not, extract everything before the last occurrence of the last name instead, and use that as the parsed name
     
     Args:
         contributor_full (str): Full contributor string like "KAUR, AASEESDUNWOODY, GA 30360"
@@ -18,33 +26,75 @@ def extract_first_name_and_split(contributor_full: str, original_name: str) -> t
     Returns:
         tuple[str, str]: (name_part, address_part)
     """
-    # Extract first name from original name and capitalize it
-    # Handle formats like "LAST, FIRST" or "FIRST LAST"
+    # Extract first and last names from original name
+    first_name = ''
+    last_name = ''
+    
     if ',' in original_name:
         # Format: "LAST, FIRST"
         parts = original_name.split(',')
         if len(parts) >= 2:
+            last_name = parts[0].strip()
             first_name = parts[1].strip().split()[0]  # Get first word after comma
         else:
-            first_name = parts[0].strip().split()[0]  # Fallback to first word
+            # Single name after comma or malformed
+            first_name = parts[0].strip().split()[0]
+            last_name = ''
     else:
         # Format: "FIRST LAST" or single name
-        first_name = original_name.strip().split()[0]
+        name_parts = original_name.strip().split()
+        if len(name_parts) >= 2:
+            first_name = name_parts[0]
+            last_name = name_parts[-1]  # Take the last word as last name
+        else:
+            first_name = name_parts[0] if name_parts else ''
+            last_name = ''
     
-    # Capitalize the first name
-    first_name_capitalized = first_name.upper()
+    # Capitalize names for case-insensitive matching
+    first_name_upper = first_name.upper()
+    last_name_upper = last_name.upper()
+    contributor_upper = contributor_full.upper()
     
-    # Find the first occurrence of the capitalized first name in contributor_full
-    first_name_index = contributor_full.find(first_name_capitalized)
+    # Step 1: Find the first occurrence of the first name
+    first_name_index = contributor_upper.find(first_name_upper) if first_name_upper else -1
     
     if first_name_index != -1:
-        # Split at the first name
-        name_part = contributor_full[:first_name_index + len(first_name_capitalized)].strip()
-        address_part = contributor_full[first_name_index + len(first_name_capitalized):].strip()
+        # Extract everything before the first occurrence of the first name
+        prefix_before_first_name = contributor_full[:first_name_index].strip()
+        
+        # Step 2: Check if this prefix starts with last name followed by comma (case-insensitive)
+        if last_name_upper and prefix_before_first_name.upper().startswith(last_name_upper + ','):
+            # Use the prefix + first name as the parsed name
+            name_end_index = first_name_index + len(first_name_upper)
+            name_part = contributor_full[:name_end_index].strip()
+            address_part = contributor_full[name_end_index:].strip()
+            return name_part, address_part
+        
+        # Step 3: If not, find the last occurrence of the last name
+        if last_name_upper:
+            last_name_index = contributor_upper.rfind(last_name_upper)
+            if last_name_index != -1:
+                # Use everything before the last occurrence of the last name
+                name_part = contributor_full[:last_name_index + len(last_name_upper)].strip()
+                address_part = contributor_full[last_name_index + len(last_name_upper):].strip()
+                return name_part, address_part
+        
+        # Fallback: use the original logic (everything before first name + first name)
+        name_end_index = first_name_index + len(first_name_upper)
+        name_part = contributor_full[:name_end_index].strip()
+        address_part = contributor_full[name_end_index:].strip()
         return name_part, address_part
-    else:
-        # If first name not found, return the whole string as name and empty address
-        return contributor_full, ''
+    
+    # If first name not found, try to find last name only
+    if last_name_upper:
+        last_name_index = contributor_upper.rfind(last_name_upper)
+        if last_name_index != -1:
+            name_part = contributor_full[:last_name_index + len(last_name_upper)].strip()
+            address_part = contributor_full[last_name_index + len(last_name_upper):].strip()
+            return name_part, address_part
+    
+    # Final fallback: return the whole string as name and empty address
+    return contributor_full, ''
 
 def extract_name_from_contributor(contributor_full: str, original_name: str = '') -> str:
     """
